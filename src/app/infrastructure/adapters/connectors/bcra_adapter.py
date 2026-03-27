@@ -1,4 +1,4 @@
-"""Adapter for BCRA public API — exchange rates and monetary variables."""
+"""Adapter for BCRA public API — exchange rates, monetary variables, and Central de Deudores."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 
 class BCRAAdapter:
-    """Adapter para API del BCRA — cotizaciones y variables monetarias."""
+    """Adapter para API del BCRA — cotizaciones, variables monetarias y Central de Deudores."""
 
     BASE_URL = "https://api.bcra.gob.ar"
 
@@ -181,6 +181,256 @@ class BCRAAdapter:
             raise ConnectorError(
                 error_code=ErrorCode.CN_BCRA_UNAVAILABLE,
                 details={"action": "get_variable_historica", "reason": str(exc)},
+            ) from exc
+
+    # ── Central de Deudores endpoints ──────────────────────────
+
+    @with_retry(max_retries=2)
+    async def get_deudas(self, identificacion: str) -> DataResult:
+        """Get current credit status from BCRA Central de Deudores.
+
+        Returns debts, credit classification (situación 1-5), amounts,
+        and days overdue for a given CUIT/CUIL/CDI (11 digits).
+        API docs: https://www.bcra.gob.ar/apis-banco-central/
+        """
+        identificacion = identificacion.replace("-", "").strip()
+        if len(identificacion) != 11 or not identificacion.isdigit():
+            raise ConnectorError(
+                error_code=ErrorCode.CN_BCRA_UNAVAILABLE,
+                details={
+                    "action": "get_deudas",
+                    "reason": f"CUIT/CUIL/CDI must be 11 digits, got: {identificacion!r}",
+                },
+            )
+        try:
+            client = self._get_client()
+            url = f"{self.BASE_URL}/CentralDeDeudores/v1.0/Deudas/{identificacion}"
+            resp = await client.get(url)
+
+            data = resp.json()
+            status = data.get("status", resp.status_code)
+
+            if status == 404:
+                return DataResult(
+                    source="bcra_deudores",
+                    portal_name="BCRA — Central de Deudores",
+                    portal_url="https://www.bcra.gob.ar/BCRAyVos/Situacion_crediticia.asp",
+                    dataset_title=f"Central de Deudores — CUIT {identificacion}",
+                    format="json",
+                    records=[],
+                    metadata={
+                        "fetched_at": datetime.now(UTC).isoformat(),
+                        "identificacion": identificacion,
+                        "message": "No se encontraron datos para la identificación ingresada.",
+                    },
+                )
+            if status == 400:
+                error_msgs = data.get("errorMessages", [])
+                raise ConnectorError(
+                    error_code=ErrorCode.CN_BCRA_UNAVAILABLE,
+                    details={"action": "get_deudas", "reason": "; ".join(error_msgs)},
+                )
+
+            resp.raise_for_status()
+            results = data.get("results", {})
+
+            # Flatten periods → records for easier LLM consumption
+            records = []
+            denominacion = results.get("denominacion", "")
+            for periodo_data in results.get("periodos", []):
+                periodo = periodo_data.get("periodo", "")
+                for entidad in periodo_data.get("entidades", []):
+                    records.append({
+                        "denominacion": denominacion,
+                        "periodo": periodo,
+                        **entidad,
+                    })
+
+            return DataResult(
+                source="bcra_deudores",
+                portal_name="BCRA — Central de Deudores",
+                portal_url="https://www.bcra.gob.ar/BCRAyVos/Situacion_crediticia.asp",
+                dataset_title=f"Situación crediticia — {denominacion or identificacion}",
+                format="json",
+                records=records,
+                metadata={
+                    "fetched_at": datetime.now(UTC).isoformat(),
+                    "identificacion": identificacion,
+                    "denominacion": denominacion,
+                    "tipo": "deudas_actual",
+                },
+            )
+        except ConnectorError:
+            raise
+        except Exception as exc:
+            raise ConnectorError(
+                error_code=ErrorCode.CN_BCRA_UNAVAILABLE,
+                details={"action": "get_deudas", "reason": str(exc)},
+            ) from exc
+
+    @with_retry(max_retries=2)
+    async def get_deudas_historicas(self, identificacion: str) -> DataResult:
+        """Get 24-month credit history from BCRA Central de Deudores.
+
+        Returns historical credit classification per entity for the last
+        24 months for a given CUIT/CUIL/CDI (11 digits).
+        """
+        identificacion = identificacion.replace("-", "").strip()
+        if len(identificacion) != 11 or not identificacion.isdigit():
+            raise ConnectorError(
+                error_code=ErrorCode.CN_BCRA_UNAVAILABLE,
+                details={
+                    "action": "get_deudas_historicas",
+                    "reason": f"CUIT/CUIL/CDI must be 11 digits, got: {identificacion!r}",
+                },
+            )
+        try:
+            client = self._get_client()
+            url = f"{self.BASE_URL}/CentralDeDeudores/v1.0/Deudas/Historicas/{identificacion}"
+            resp = await client.get(url)
+
+            data = resp.json()
+            status = data.get("status", resp.status_code)
+
+            if status == 404:
+                return DataResult(
+                    source="bcra_deudores",
+                    portal_name="BCRA — Central de Deudores",
+                    portal_url="https://www.bcra.gob.ar/BCRAyVos/Situacion_crediticia.asp",
+                    dataset_title=f"Historial crediticio — CUIT {identificacion}",
+                    format="json",
+                    records=[],
+                    metadata={
+                        "fetched_at": datetime.now(UTC).isoformat(),
+                        "identificacion": identificacion,
+                        "message": "No se encontraron datos para la identificación ingresada.",
+                    },
+                )
+            if status == 400:
+                error_msgs = data.get("errorMessages", [])
+                raise ConnectorError(
+                    error_code=ErrorCode.CN_BCRA_UNAVAILABLE,
+                    details={"action": "get_deudas_historicas", "reason": "; ".join(error_msgs)},
+                )
+
+            resp.raise_for_status()
+            results = data.get("results", {})
+
+            records = []
+            denominacion = results.get("denominacion", "")
+            for periodo_data in results.get("periodos", []):
+                periodo = periodo_data.get("periodo", "")
+                for entidad in periodo_data.get("entidades", []):
+                    records.append({
+                        "denominacion": denominacion,
+                        "periodo": periodo,
+                        **entidad,
+                    })
+
+            return DataResult(
+                source="bcra_deudores",
+                portal_name="BCRA — Central de Deudores",
+                portal_url="https://www.bcra.gob.ar/BCRAyVos/Situacion_crediticia.asp",
+                dataset_title=f"Historial crediticio 24 meses — {denominacion or identificacion}",
+                format="json",
+                records=records,
+                metadata={
+                    "fetched_at": datetime.now(UTC).isoformat(),
+                    "identificacion": identificacion,
+                    "denominacion": denominacion,
+                    "tipo": "deudas_historicas",
+                },
+            )
+        except ConnectorError:
+            raise
+        except Exception as exc:
+            raise ConnectorError(
+                error_code=ErrorCode.CN_BCRA_UNAVAILABLE,
+                details={"action": "get_deudas_historicas", "reason": str(exc)},
+            ) from exc
+
+    @with_retry(max_retries=2)
+    async def get_cheques_rechazados(self, identificacion: str) -> DataResult:
+        """Get rejected checks from BCRA Central de Deudores.
+
+        Returns rejected checks with reasons (sin fondos, defectos formales),
+        amounts, dates, and fine status for a given CUIT/CUIL/CDI (11 digits).
+        """
+        identificacion = identificacion.replace("-", "").strip()
+        if len(identificacion) != 11 or not identificacion.isdigit():
+            raise ConnectorError(
+                error_code=ErrorCode.CN_BCRA_UNAVAILABLE,
+                details={
+                    "action": "get_cheques_rechazados",
+                    "reason": f"CUIT/CUIL/CDI must be 11 digits, got: {identificacion!r}",
+                },
+            )
+        try:
+            client = self._get_client()
+            url = f"{self.BASE_URL}/CentralDeDeudores/v1.0/Deudas/ChequesRechazados/{identificacion}"
+            resp = await client.get(url)
+
+            data = resp.json()
+            status = data.get("status", resp.status_code)
+
+            if status == 404:
+                return DataResult(
+                    source="bcra_deudores",
+                    portal_name="BCRA — Central de Deudores",
+                    portal_url="https://www.bcra.gob.ar/BCRAyVos/Situacion_crediticia.asp",
+                    dataset_title=f"Cheques rechazados — CUIT {identificacion}",
+                    format="json",
+                    records=[],
+                    metadata={
+                        "fetched_at": datetime.now(UTC).isoformat(),
+                        "identificacion": identificacion,
+                        "message": "No se encontraron cheques rechazados para la identificación ingresada.",
+                    },
+                )
+            if status == 400:
+                error_msgs = data.get("errorMessages", [])
+                raise ConnectorError(
+                    error_code=ErrorCode.CN_BCRA_UNAVAILABLE,
+                    details={"action": "get_cheques_rechazados", "reason": "; ".join(error_msgs)},
+                )
+
+            resp.raise_for_status()
+            results = data.get("results", {})
+
+            records = []
+            denominacion = results.get("denominacion", "")
+            for causal_data in results.get("causales", []):
+                causal = causal_data.get("causal", "")
+                for entidad_data in causal_data.get("entidades", []):
+                    entidad_num = entidad_data.get("entidad", "")
+                    for detalle in entidad_data.get("detalle", []):
+                        records.append({
+                            "denominacion": denominacion,
+                            "causal": causal,
+                            "entidad": entidad_num,
+                            **detalle,
+                        })
+
+            return DataResult(
+                source="bcra_deudores",
+                portal_name="BCRA — Central de Deudores",
+                portal_url="https://www.bcra.gob.ar/BCRAyVos/Situacion_crediticia.asp",
+                dataset_title=f"Cheques rechazados — {denominacion or identificacion}",
+                format="json",
+                records=records,
+                metadata={
+                    "fetched_at": datetime.now(UTC).isoformat(),
+                    "identificacion": identificacion,
+                    "denominacion": denominacion,
+                    "tipo": "cheques_rechazados",
+                },
+            )
+        except ConnectorError:
+            raise
+        except Exception as exc:
+            raise ConnectorError(
+                error_code=ErrorCode.CN_BCRA_UNAVAILABLE,
+                details={"action": "get_cheques_rechazados", "reason": str(exc)},
             ) from exc
 
     async def search(self, query: str) -> DataResult:

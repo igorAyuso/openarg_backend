@@ -1,4 +1,9 @@
-"""Connector: BCRA (Banco Central de la República Argentina)."""
+"""Connector: BCRA (Banco Central de la República Argentina).
+
+Supports exchange-rate endpoints AND the Central de Deudores API
+(credit status, 24-month history, rejected checks) — all public and
+free, no authentication required.
+"""
 
 from __future__ import annotations
 
@@ -24,6 +29,7 @@ async def execute_bcra_step(
     params = step.params
     tipo = params.get("tipo", "cotizaciones")
     try:
+        # ── Exchange-rate / monetary-variable endpoints ──────────
         if tipo == "cotizaciones":
             result = await bcra.get_cotizaciones(
                 moneda=params.get("moneda", "USD"),
@@ -42,6 +48,18 @@ async def execute_bcra_step(
                     fecha_desde=params.get("fecha_desde", "2024-01-01"),
                     fecha_hasta=params.get("fecha_hasta", datetime.now(UTC).strftime("%Y-%m-%d")),
                 )
+
+        # ── Central de Deudores endpoints ────────────────────────
+        elif tipo == "deudas":
+            identificacion = params.get("identificacion", "")
+            result = await bcra.get_deudas(identificacion)
+        elif tipo == "deudas_historicas":
+            identificacion = params.get("identificacion", "")
+            result = await bcra.get_deudas_historicas(identificacion)
+        elif tipo == "cheques_rechazados":
+            identificacion = params.get("identificacion", "")
+            result = await bcra.get_cheques_rechazados(identificacion)
+
         else:
             result = await bcra.get_cotizaciones()
         return [result] if result else []

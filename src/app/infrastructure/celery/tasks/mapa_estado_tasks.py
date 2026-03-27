@@ -2,7 +2,7 @@
 Mapa del Estado — ETL de autoridades del Poder Ejecutivo Nacional.
 
 Descarga el CSV actualizado de autoridades PEN desde
-mapadelestado.jefatura.gob.ar (Jefatura de Gabinete de Ministros)
+mapadelestado.dyte.gob.ar (Jefatura de Gabinete de Ministros)
 y lo cachea en PostgreSQL para consultas NL2SQL.
 
 Incluye: Presidente, Vicepresidente, Ministros, Secretarios, etc.
@@ -25,7 +25,8 @@ from app.infrastructure.celery.tasks._db import get_sync_engine
 
 logger = logging.getLogger(__name__)
 
-CSV_URL = "https://mapadelestado.jefatura.gob.ar/back/api/datos.php?db=m&id=9&fi=csv"
+# jefatura.gob.ar 301-redirects to dyte.gob.ar — use final URL directly
+CSV_URL = "https://mapadelestado.dyte.gob.ar/back/api/datos.php?db=m&id=9&fi=csv"
 
 
 def _register_dataset(engine, source_id: str, title: str, table_name: str, df: pd.DataFrame):
@@ -151,6 +152,8 @@ def scrape_mapa_estado(self):
                 "autoridad_tratamiento",
                 "autoridad_nombre",
                 "autoridad_apellido",
+                "autoridad_dni",
+                "autoridad_cuil",
                 "autoridad_sexo",
                 "autoridad_norma_designacion",
                 "web",

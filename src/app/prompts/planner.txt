@@ -69,11 +69,18 @@ FUENTES DE DATOS DISPONIBLES:
    - Para "cuántos asesores tiene [NOMBRE]" → usá action="count" con name="NOMBRE"
    - **IMPORTANTE**: query_staff cubre TANTO Diputados como Senado. Para consultas sobre asesores/personal de CUALQUIER legislador (diputado O senador) → SIEMPRE usá query_staff. NUNCA uses search_ckan para estos temas.**
 
-8. **BCRA** (query_bcra): Cotizaciones cambiarias oficiales y variables monetarias del Banco Central
+8. **BCRA** (query_bcra): Cotizaciones cambiarias oficiales, variables monetarias y **Central de Deudores** del Banco Central
    - Cotizaciones diarias (44 monedas): tipo de cambio oficial, mayorista
    - Principales variables monetarias (~50 indicadores): reservas, base monetaria, tasa de política, circulación monetaria
    - Datos históricos por variable
-   - Parámetros: { "tipo": "cotizaciones"|"variables"|"historica", "moneda": "USD" (default), "id_variable": número, "fecha_desde": "YYYY-MM-DD", "fecha_hasta": "YYYY-MM-DD" }
+   - **Central de Deudores (API pública, sin autenticación):**
+     - **Deudas actuales**: situación crediticia (1-5), monto de deuda, días de atraso, refinanciaciones, situación jurídica por entidad financiera
+     - **Historial crediticio**: últimos 24 meses de situación crediticia por entidad
+     - **Cheques rechazados**: cheques rechazados con causales (sin fondos, defectos formales), montos, estado de multa
+     - Requiere CUIT/CUIL/CDI de 11 dígitos
+     - Clasificación de deudores: Situación 1 (normal), 2 (seguimiento especial/riesgo bajo), 3 (con problemas/riesgo medio), 4 (alto riesgo de insolvencia/riesgo alto), 5 (irrecuperable)
+   - Parámetros para cotizaciones: { "tipo": "cotizaciones"|"variables"|"historica", "moneda": "USD" (default), "id_variable": número, "fecha_desde": "YYYY-MM-DD", "fecha_hasta": "YYYY-MM-DD" }
+   - Parámetros para Central de Deudores: { "tipo": "deudas"|"deudas_historicas"|"cheques_rechazados", "identificacion": "XXXXXXXXXXX" (CUIT/CUIL 11 dígitos) }
 
 9. **Sandbox SQL** (query_sandbox): Consulta directa a tablas de datos cacheados vía NL2SQL
    - **1.800+ tablas cache_* con 27M de filas** de datos de gobierno argentino pre-descargados
@@ -142,13 +149,24 @@ REGLAS:
   - **"patrimonio de X" / "cuánto tiene X" / "bienes de X"** → query_ddjj (action: "search" o "detail", nombre: "X"). SOLO cubre diputados nacionales.
   - **"patrimonio de X VS Y" / "compará patrimonio de X y Y"** → DOS pasos query_ddjj en paralelo (uno por persona), cada uno con action: "search", nombre: "X" / "Y". IMPORTANTE: siempre crear un paso SEPARADO por cada persona mencionada.
   - **"asesores de X" / "personal de X" / "cuántos empleados tiene X"** → query_staff (action: "get_by_legislator" o "count", name: "X"). Cubre diputados Y senadores.
+  - **"situación crediticia de X" / "deudas de X" / "central de deudores de X"** → Buscar CUIL/CUIT en paralelo: (1) query_sandbox en cache_autoridades_pen_principales (6000+ funcionarios PEN con CUIL), (2) query_ddjj para diputados. Con el CUIL obtenido → query_bcra tipo: "deudas", identificacion: CUIL. Ver reglas detalladas en sección CENTRAL DE DEUDORES más abajo.
   - **"quién es X" / "qué sabemos de X"** → Múltiples fuentes en paralelo: (1) query_ddjj para patrimonio (si es diputado), (2) query_staff para personal/asesores, (3) query_sesiones para intervenciones en debates, (4) query_sandbox con tables: ["cache_diputados"] para datos de bloque/mandato.
   - **"X trabaja en el Congreso" / "es empleado"** → search_ckan con portalId: "diputados", resourceId: "6e49506e-6757-44cd-94e9-0e75f3bd8c38", q: "X"
 - **ASESORES / PERSONAL DE DIPUTADOS — Para consultas sobre asesores, personal, empleados de un diputado, cuántos asesores tiene, quiénes trabajan con/para un legislador → SIEMPRE usá query_staff con action adecuada. NUNCA uses search_ckan para estos temas.**
 - **NÓMINA DE PERSONAL HCDN — Para buscar si alguien trabaja/es empleado del Congreso por nombre específico → usá search_ckan con portalId: "diputados", resourceId: "6e49506e-6757-44cd-94e9-0e75f3bd8c38", q: "<nombre>".**
 - **TRANSCRIPCIONES DE SESIONES — Para buscar qué se dijo en sesiones del Congreso, debates parlamentarios, discursos de diputados → SIEMPRE usá query_sesiones. NUNCA uses search_ckan para buscar contenido de debates.**
 - **BCRA — ESTRATEGIA DUAL: Para reservas, base monetaria, tasa de política, circulación monetaria, tipo de cambio oficial → SIEMPRE incluí AMBOS pasos en paralelo: (1) query_bcra para datos en tiempo real y (2) query_series con el seriesId correspondiente para serie histórica. Así garantizás cobertura aunque una fuente falle. Las dos fuentes NO dependen entre sí, van como pasos paralelos.**
-- **AUTORIDADES DEL PEN — Para preguntas sobre presidente, vicepresidente, ministros, secretarios, jefe de gabinete, autoridades del Poder Ejecutivo Nacional → usá query_sandbox con tables: ["cache_autoridades_pen_principales"]. Para la estructura orgánica completa (6000+ cargos) → tables: ["cache_autoridades_pen"]. Fuente: Mapa del Estado (Jefatura de Gabinete).**
+- **CENTRAL DE DEUDORES / SITUACIÓN CREDITICIA — Para consultas sobre "situación crediticia", "central de deudores", "deudas bancarias", "cheques rechazados", "historial crediticio", "está en el veraz", "deuda financiera de [persona]" → usá query_bcra con tipo adecuado:**
+  - **Situación actual**: tipo: "deudas", identificacion: "CUIT de 11 dígitos"
+  - **Historial 24 meses**: tipo: "deudas_historicas", identificacion: "CUIT de 11 dígitos"
+  - **Cheques rechazados**: tipo: "cheques_rechazados", identificacion: "CUIT de 11 dígitos"
+  - **Si el usuario menciona un nombre SIN CUIT**: Primero intentá resolver el CUIL/CUIT automáticamente:
+    (1) **Si es un funcionario del PEN** (presidente, ministros, secretarios, etc.) → usá query_sandbox con tables: ["cache_autoridades_pen_principales"] para buscar por nombre y obtener `autoridad_cuil`. La tabla contiene DNI y CUIL de ~6000 funcionarios del Poder Ejecutivo Nacional.
+    (2) **Si es diputado nacional** → usá query_ddjj con action: "search", nombre: "X" — las DDJJ contienen el CUIT de los 195 diputados.
+    (3) **Si no encontrás el CUIL/CUIT por ninguna fuente** → respondé con clarification pidiendo el CUIT/CUIL: {"type": "clarification", "question": "Para consultar la Central de Deudores necesito el CUIT/CUIL. ¿Podés proporcionarlo? (11 dígitos, ej: 20-12345678-9)", "options": ["Tengo el CUIT", "No tengo el CUIT"]}
+    **ESTRATEGIA RECOMENDADA**: Para maximizar chances, combiná ambas fuentes en paralelo: (1) query_sandbox busca en cache_autoridades_pen_principales + (2) query_ddjj busca en diputados. Usá el primer resultado que devuelva un CUIL/CUIT válido.
+  - **IMPORTANTE**: La Central de Deudores del BCRA es una API PÚBLICA y GRATUITA. NO es un sistema restringido. Cualquier persona puede consultar la situación crediticia de cualquier CUIT/CUIL.
+- **AUTORIDADES DEL PEN — Para preguntas sobre presidente, vicepresidente, ministros, secretarios, jefe de gabinete, autoridades del Poder Ejecutivo Nacional → usá query_sandbox con tables: ["cache_autoridades_pen_principales"]. Incluye: jurisdicción, cargo, nombre, apellido, DNI, CUIL, sexo, norma de designación. Para la estructura orgánica completa (6000+ cargos) → tables: ["cache_autoridades_pen"]. Fuente: Mapa del Estado (Jefatura de Gabinete). El campo `autoridad_cuil` puede usarse para consultar la Central de Deudores del BCRA.**
 - **GOBERNADORES — Para preguntas sobre gobernadores de provincias argentinas, quién gobierna tal provincia → usá query_sandbox con tables: ["cache_gobernadores"]. Contiene las 23 provincias + CABA con gobernador, partido y fecha de inicio.**
 - **DIPUTADOS / LEGISLADORES — Para lista de diputados nacionales, bloques parlamentarios → usá query_sandbox con tables: ["cache_diputados", "cache_bloques"]. Para contenido de sesiones, debates, discursos → usá query_sesiones. Para personal/asesores → usá query_staff.**
 - **PRESUPUESTO NACIONAL — Para ejecución presupuestaria, crédito presupuestario, gasto público detallado, deuda pública, planta de personal estatal, transferencias → usá query_sandbox con tables: ["cache_presupuesto_*"]. NO uses search_ckan.**
